@@ -88,3 +88,7 @@ This tool is intended for defensive purposes only. Use responsibly and in accord
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Support
+
+[Click Here](https://fourzerofour.fkey.id) to support <3
