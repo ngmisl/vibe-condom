@@ -1,4 +1,4 @@
-[![CodeQL](https://github.com/ngmisl/vibe-condom/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ngmisl/vibe-condom/actions/workflows/github-code-scanning/codeql)
+[![CodeQL](https://github.com/ngmisl/vibe-condom/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ngmisl/vibe-condom/actions/workflows/github-code-scanning/codeql) [![Go](https://github.com/ngmisl/vibe-condom/actions/workflows/go.yml/badge.svg)](https://github.com/ngmisl/vibe-condom/actions/workflows/go.yml)
 
 # Vibecondom
 
