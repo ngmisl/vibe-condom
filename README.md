@@ -2,6 +2,8 @@
 
 A Go-based security tool for detecting malicious prompt injections and hidden characters in text content intended for Large Language Models (LLMs).
 
+![2025-04-16 12 51 12 embracethered com fdccd6384947](https://github.com/user-attachments/assets/97a15516-5825-4175-8f03-719d1b438e3a)
+
 ## Overview
 
 Vibecondom scans text files for hidden characters, manipulative patterns, and potential LLM prompt injection payloads that could be used to circumvent AI safety measures. It's designed to be a defensive tool for AI system developers, content moderators, and security researchers.
