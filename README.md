@@ -1,3 +1,5 @@
+[![CodeQL](https://github.com/ngmisl/vibe-condom/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/ngmisl/vibe-condom/actions/workflows/github-code-scanning/codeql)
+
 # Vibecondom
 
 A Go-based security tool for detecting malicious prompt injections and hidden characters in text content intended for Large Language Models (LLMs).
@@ -83,7 +85,7 @@ This tool is intended for defensive purposes only. Use responsibly and in accord
 
 ## License
 
-[MIT]
+MIT
 
 ## Contributing
 
