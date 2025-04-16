@@ -81,7 +81,7 @@ This tool is intended for defensive purposes only. Use responsibly and in accord
 
 ## License
 
-[Your License Choice]
+[MIT]
 
 ## Contributing
 

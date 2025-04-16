@@ -1,0 +1,29 @@
+# Normal Prompt Example
+
+This is a completely normal prompt for an LLM that doesn't contain any hidden characters or malicious content.
+
+## Task Instructions
+
+Please analyze the following code snippet and explain what it does:
+
+```python
+def fibonacci(n):
+    if n <= 0:
+        return []
+    elif n == 1:
+        return [0]
+    elif n == 2:
+        return [0, 1]
+    else:
+        fib = [0, 1]
+        for i in range(2, n):
+            fib.append(fib[i-1] + fib[i-2])
+        return fib
+```
+
+Then answer these follow-up questions:
+1. What's the time complexity of this implementation?
+2. How could we optimize it for larger values of n?
+3. What are some practical applications of the Fibonacci sequence?
+
+Thank you!
