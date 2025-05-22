@@ -84,7 +84,7 @@ func main() {
 	var logLevel string
 
 	// --- Set Default Extensions ---
-	defaultExtensions := ".txt,.md,.mdc,.windsurfrules"
+	defaultExtensions := ".txt,.md,.mdc,.windsurfrules,AGENT.md,AGENTS.md"
 
 	flag.StringVar(&cfg.mode, "mode", "local", "Mode: 'local' (check directory) or 'remote' (clone Git repo)")
 	flag.StringVar(&cfg.target, "target", "", "Required: Directory path (local) or Git URL (remote)")
@@ -290,8 +290,29 @@ func checkLocalDirectory(cfg *config) error {
 	})
 }
 
+// validateGitURL checks if the URL is a valid Git URL
+func validateGitURL(url string) error {
+	// Basic check for common Git URL patterns
+	// This is a basic validation - you might want to adjust based on your needs
+	validPrefixes := []string{"https://", "http://", "git@", "git://", "ssh://"}
+	
+	// Check if URL starts with any valid prefix
+	for _, prefix := range validPrefixes {
+		if strings.HasPrefix(url, prefix) {
+			return nil
+		}
+	}
+	
+	return fmt.Errorf("invalid Git URL format. Must start with one of: %v", validPrefixes)
+}
+
 // Clones a remote git repository and checks it using the shared config.
 func checkRemoteRepo(cfg *config) error {
+	// Validate the Git URL before proceeding
+	if err := validateGitURL(cfg.target); err != nil {
+		return fmt.Errorf("invalid repository URL: %w", err)
+	}
+
 	tempDir, err := os.MkdirTemp(cfg.tempDirBase, "repo-scan-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory in %s: %w", cfg.tempDirBase, err)
@@ -310,18 +331,41 @@ func checkRemoteRepo(cfg *config) error {
 
 	cfg.logger.Info("Cloning repository...", "url", cfg.target, "destination", tempDir)
 
-	// Execute git clone command safely
-	// Using shallow clone and quiet flag
-	cmd := exec.Command(cfg.gitPath, "clone", "--depth", "1", "--quiet", cfg.target, tempDir)
+	// Create a context with timeout (5 minutes)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Execute git clone command safely with context
+	cmd := exec.CommandContext(ctx, cfg.gitPath, "clone", "--depth", "1", "--quiet", cfg.target, tempDir)
+	
+	// Set a clean environment
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")} // Only keep PATH for security
+	
+	// Set working directory to a safe location
+	cmd.Dir = cfg.tempDirBase
+	
+	// Capture stderr for better error messages
 	var stderr strings.Builder
-	cmd.Stderr = &stderr // Capture stderr for better error messages
+	cmd.Stderr = &stderr
 
 	err = cmd.Run()
 	if err != nil {
+		// Check if the context timed out
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("git clone timed out after 5 minutes")
+		}
+		
 		// Attempt to remove partially cloned directory on failure
 		_ = os.RemoveAll(tempDir) // Ignore error during cleanup on failure path
-		// Provide more context in the error message
-		return fmt.Errorf("git clone failed for '%s': %w. Git stderr: %s", cfg.target, err, strings.TrimSpace(stderr.String()))
+		
+		// Sanitize the error message to prevent command injection in logs
+		safeURL := cfg.target
+		if len(safeURL) > 100 { // Truncate long URLs in error messages
+			safeURL = safeURL[:100] + "..."
+		}
+		
+		// Provide sanitized context in the error message
+		return fmt.Errorf("git clone failed: %w. Git stderr: %s", err, strings.TrimSpace(stderr.String()))
 	}
 
 	cfg.logger.Info("Clone successful. Starting scan.", "path", tempDir)

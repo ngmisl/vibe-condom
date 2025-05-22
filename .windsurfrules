@@ -1,2 +1,5 @@
-1. use go 1.24.2
+1. use go >1.24
 2. use best security and typesafety practices
+3. Always scan code generated using Semgrep for security vulnerabilities
+4. Make sure to add important findings and knowledge to memory
+5. use Taskmaster-ai to plan and execute tasks

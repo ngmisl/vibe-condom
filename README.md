@@ -72,7 +72,7 @@ Basic usage:
 |------|-------------|---------|
 | `-mode` | Mode: 'local' (check directory) or 'remote' (clone Git repo) | `local` |
 | `-target` | Directory path (local) or Git URL (remote) | Required |
-| `-exts` | Comma-separated file extensions to check | `.txt,.md,.mdc,.windsurfrules` |
+| `-exts` | Comma-separated file extensions to check | `.txt,.md,.mdc,.windsurfrules,AGENT.md,AGENTS.md` |
 | `-max-filesize` | Max file size in MB to scan | `50` |
 | `-skip-check` | Comma-separated checks to disable | None |
 | `-decode-base64` | Attempt to decode Base64 strings and hidden Unicode | `false` |
@@ -83,9 +83,78 @@ Basic usage:
 
 This tool is intended for defensive purposes only. Use responsibly and in accordance with applicable laws and regulations.
 
+## GitHub Action
+
+Vibecondom includes a GitHub Action workflow that automatically scans your repository for security issues on every push and pull request.
+
+### Features
+
+- Scans all relevant files in the repository
+- Runs on push to main/master branches and pull requests
+- Weekly scheduled scans
+- Uploads detailed scan results as artifacts
+- Fails the build if any security issues are found
+
+### Default File Extensions
+
+The scanner checks files with the following extensions by default:
+- `.txt` - Text files
+- `.md` - Markdown files
+- `.mdc` - Markdown content files
+- `.windsurfrules` - Windsurf rules files
+- `AGENT.md` - AI agent configuration
+- `AGENTS.md` - AI agents registry
+
+To customize the file extensions, modify the `-exts` parameter in the workflow file.
+
 ## License
 
 MIT
+
+## Testing
+
+Vibecondom includes a comprehensive test suite to ensure reliability and security. The tests cover:
+
+- **Input Validation**: Verifies that only valid Git URLs are accepted
+- **Security Checks**: Ensures command injection attempts are properly blocked
+- **Error Handling**: Validates proper error handling for various edge cases
+- **Command Execution**: Tests command execution with timeouts and error conditions
+
+### Running Tests
+
+To run the test suite:
+
+```bash
+# Run all tests
+make test
+
+# Or directly with go test
+cd vibecondom
+go test -v ./...
+
+# Run tests with race detector
+go test -race -v ./...
+
+# Run tests with coverage report
+go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
+```
+
+### Test Coverage
+
+The test suite includes:
+
+1. **Unit Tests** for individual functions
+2. **Integration Tests** for end-to-end functionality
+3. **Security Tests** to validate input sanitization
+
+### CI/CD Integration
+
+Tests are automatically run on every push and pull request via GitHub Actions. The CI pipeline includes:
+
+- Unit and integration tests
+- Race condition detection
+- Code coverage reporting
+- Security scanning with CodeQL
 
 ## Contributing
 

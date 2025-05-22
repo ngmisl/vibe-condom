@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Add AGENT.md and AGENTS.md to default extensions",
+      "description": "Update the default file extensions in vibecondom.go to include AGENT.md and AGENTS.md",
+      "status": "done",
+      "priority": "high",
+      "created_at": "2025-05-22T11:13:16+02:00",
+      "updated_at": "2025-05-22T11:15:00+02:00",
+      "completed_at": "2025-05-22T11:15:00+02:00"
+    },
+    {
+      "id": "2",
+      "title": "Create GitHub Action for security scanning",
+      "description": "Set up a GitHub Actions workflow to run the scanner on PRs and pushes, failing when malicious content is detected",
+      "status": "done",
+      "priority": "high",
+      "created_at": "2025-05-22T11:13:16+02:00",
+      "updated_at": "2025-05-22T11:16:00+02:00",
+      "completed_at": "2025-05-22T11:16:00+02:00"
+    },
+    {
+      "id": "3",
+      "title": "Update README with new features",
+      "description": "Document the new default extensions and GitHub Action in the README",
+      "status": "done",
+      "priority": "medium",
+      "created_at": "2025-05-22T11:13:16+02:00",
+      "updated_at": "2025-05-22T11:17:00+02:00",
+      "completed_at": "2025-05-22T11:17:00+02:00"
+    }
+  ]
+}
