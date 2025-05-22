@@ -87,13 +87,42 @@ This tool is intended for defensive purposes only. Use responsibly and in accord
 
 Vibecondom includes a GitHub Action workflow that automatically scans your repository for security issues on every push and pull request.
 
+### Adding Vibecondom to Your Repository
+
+1. **Create the workflow directory** in your repository if it doesn't exist:
+   ```bash
+   mkdir -p .github/workflows/
+   ```
+
+2. **Copy the workflow file** to your repository:
+   ```bash
+   # From the root of your repository
+   curl -o .github/workflows/security-scan.yaml https://raw.githubusercontent.com/ngmisl/vibe-condom/main/.github/workflows/security-scan.yaml
+   ```
+
+3. **Customize the workflow** (optional):
+   - By default, the workflow scans all text-based files
+   - To customize file extensions, modify the `extensions` parameter in the workflow file
+   - Adjust the schedule for periodic scans if needed
+
+4. **Commit and push** the changes to your repository:
+   ```bash
+   git add .github/workflows/security-scan.yaml
+   git commit -m "Add Vibecondom security scan"
+   git push
+   ```
+
 ### Features
 
 - Scans all relevant files in the repository
 - Runs on push to main/master branches and pull requests
-- Weekly scheduled scans
+- Weekly scheduled scans (runs every Sunday at 00:00 UTC)
 - Uploads detailed scan results as artifacts
 - Fails the build if any security issues are found
+- Provides a security badge for your README:
+  ```markdown
+  [![Security Scan](https://github.com/your-username/your-repo/actions/workflows/security-scan.yaml/badge.svg)](https://github.com/your-username/your-repo/actions/workflows/security-scan.yaml)
+  ```
 
 ### Default File Extensions
 
@@ -105,7 +134,14 @@ The scanner checks files with the following extensions by default:
 - `AGENT.md` - AI agent configuration
 - `AGENTS.md` - AI agents registry
 
-To customize the file extensions, modify the `-exts` parameter in the workflow file.
+To customize the file extensions, modify the `extensions` parameter in the workflow file:
+
+```yaml
+- name: Run Vibecondom Security Scan
+  uses: ngmisl/vibe-condom@main
+  with:
+    extensions: ".txt,.md,.yaml,.yml"  # Customize file extensions here
+```
 
 ## License
 
