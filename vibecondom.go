@@ -73,6 +73,7 @@ type config struct {
 }
 
 func main() {
+	fmt.Fprintf(os.Stderr, "DEBUG: os.Args = %#v\n", os.Args) // Print raw arguments
 	// --- Configuration via Flags ---
 	cfg := &config{
 		// Initialize logger early for potential setup errors
