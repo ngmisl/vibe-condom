@@ -59,17 +59,18 @@ var wordRegex = regexp.MustCompile(`[\pL\pN]+`)
 var potentialBase64Regex = regexp.MustCompile(`(?:[A-Za-z0-9+/]{4}){5,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?`)
 
 type config struct {
-	mode         string
-	target       string
-	extensions   []string
-	tempDirBase  string
-	maxFileSize  int64 // Max file size in bytes
-	skipChecks   []CheckType
-	decodeBase64 bool // Flag to attempt decoding base64
-	logger       *slog.Logger
-	gitPath      string // Path to git executable
-	issuesFound  int    // Counter for total issues
-	filesChecked int    // Counter for files checked
+	mode                string
+	target              string
+	extensions          []string
+	tempDirBase         string
+	maxFileSize         int64 // Max file size in bytes
+	skipChecks          []CheckType
+	decodeBase64        bool // Flag to attempt decoding base64
+	logger              *slog.Logger
+	gitPath             string // Path to git executable
+	issuesFound         int    // Counter for total issues
+	filesChecked        int    // Counter for files checked
+	excludeFilePatterns []string // Patterns for files to exclude
 }
 
 func main() {
@@ -83,6 +84,7 @@ func main() {
 	var maxFileSizeMB int64
 	var skipChecksRaw string
 	var logLevel string
+	var excludeFilesRaw string // Variable to hold the raw comma-separated string for excluded files
 
 	// --- Set Default Extensions ---
 	defaultExtensions := ".txt,.md,.mdc,.windsurfrules,AGENT.md,AGENTS.md"
@@ -96,6 +98,7 @@ func main() {
 	flag.BoolVar(&cfg.decodeBase64, "decode-base64", false, "Attempt to decode potential Base64 strings and show hex dump (use with caution)")
 	flag.StringVar(&cfg.tempDirBase, "temp-base", os.TempDir(), "Base directory for temp clones (remote mode)")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level: debug, info, warn, error")
+	flag.StringVar(&excludeFilesRaw, "exclude-files", "", "Comma-separated list of filenames to exclude (e.g., README.md,LICENSE)")
 
 	flag.Parse()
 
@@ -152,6 +155,20 @@ func main() {
 	}
 	cfg.extensions = validExts
 	cfg.logger.Info("Will check extensions", "extensions", cfg.extensions)
+
+	// Parse excluded files
+	if excludeFilesRaw != "" {
+		rawPatterns := strings.Split(excludeFilesRaw, ",")
+		for _, p := range rawPatterns {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				cfg.excludeFilePatterns = append(cfg.excludeFilePatterns, trimmed)
+			}
+		}
+		if len(cfg.excludeFilePatterns) > 0 {
+			cfg.logger.Info("Will exclude files matching patterns", "patterns", cfg.excludeFilePatterns)
+		}
+	}
 
 	// Parse skipped checks
 	if skipChecksRaw != "" {
@@ -256,6 +273,12 @@ func checkLocalDirectory(cfg *config) error {
 		if !slices.Contains(cfg.extensions, ext) {
 			cfg.logger.Log(context.Background(), slog.LevelDebug-1, "Skipping file due to non-matching extension", "path", path, "extension", ext) // Verbose debug
 			return nil                                                                                                                             // Skip files with non-matching extensions
+		}
+
+		// Check if file should be excluded
+		if shouldExcludeFile(cfg, d.Name()) {
+			cfg.logger.Log(context.Background(), slog.LevelDebug-1, "Skipping file due to exclusion pattern", "path", path, "filename", d.Name())
+			return nil
 		}
 
 		// Get file info for size check
@@ -385,6 +408,17 @@ func checkRemoteRepo(cfg *config) error {
 // Checks if a specific check type should be skipped.
 func shouldSkipCheck(cfg *config, check CheckType) bool {
 	return slices.Contains(cfg.skipChecks, check)
+}
+
+// Checks if a file should be excluded based on the patterns in cfg.excludeFilePatterns.
+func shouldExcludeFile(cfg *config, filename string) bool {
+	for _, pattern := range cfg.excludeFilePatterns {
+		// Exact match for filename
+		if filename == pattern {
+			return true
+		}
+	}
+	return false
 }
 
 // Performs the checks on a single file, reading line by line.
