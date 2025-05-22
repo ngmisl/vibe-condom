@@ -234,7 +234,7 @@ func main() {
 	cfg.logger.Info("Scan summary", "files_checked", cfg.filesChecked, "potential_issues_found", cfg.issuesFound)
 	if cfg.issuesFound > 0 {
 		cfg.logger.Warn("Potential issues were found. Please review the alerts above carefully.")
-		// os.Exit(2) // Optionally exit with a different code if issues found
+		os.Exit(2) // Exit with 2 if issues are found
 	}
 }
 
