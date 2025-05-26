@@ -25,6 +25,39 @@ const (
 	megabyte = 1024 * 1024
 )
 
+// isMostlyPrintableASCII checks if a byte slice consists mostly of printable ASCII characters.
+// Allows for common whitespace characters like space, tab, newline, carriage return.
+func isMostlyPrintableASCII(data []byte) bool {
+	if len(data) == 0 {
+		return true // Empty is considered printable for this purpose
+	}
+	for _, b := range data {
+		isPrintable := (b >= 0x20 && b <= 0x7e) // Standard printable
+		isWhitespace := (b == '\n' || b == '\r' || b == '\t')
+		if !(isPrintable || isWhitespace) {
+			return false // Found a non-printable, non-common-whitespace character
+		}
+	}
+	return true
+}
+
+// isCommonBase64Error checks if a base64 decoding error is of a common, non-suspicious type.
+func isCommonBase64Error(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for standard library's CorruptInputError (covers many "illegal base64 data" cases)
+	var cie base64.CorruptInputError
+	if errors.As(err, &cie) {
+		return true
+	}
+	// Check for specific error messages
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "illegal base64 data at input byte") ||
+		strings.Contains(errMsg, "unexpected EOF") ||
+		strings.Contains(errMsg, "invalid trailing padding")
+}
+
 // CheckType defines the type of checks available
 type CheckType string
 
@@ -519,19 +552,19 @@ func checkFile(cfg *config, filePath string) (int, error) {
 		if !shouldSkipCheck(cfg, CheckBase64) {
 			matches := potentialBase64Regex.FindAllString(line, -1) // Find all non-overlapping matches
 			if len(matches) > 0 {
-				var lineHasSignificantBase64 bool
-				var allDecodeAttemptsLogAttrs []any // For logging all attempts if decodeBase64 is on
+				var lineHadSignificantBase64 bool
+				var base64MatchDetails []slog.Attr // For logging all attempts if decodeBase64 is on
 
 				// If not decoding, and we have matches, assume it's significant for now (due to longer regex)
 				if !cfg.decodeBase64 {
-					lineHasSignificantBase64 = true
+					lineHadSignificantBase64 = true
 				}
 
 				for i, match := range matches {
 					if cfg.decodeBase64 {
 						const maxBase64Len = 10 * 1024 // Limit potential base64 strings to decode to 10KB
 						if len(match) > maxBase64Len {
-							allDecodeAttemptsLogAttrs = append(allDecodeAttemptsLogAttrs,
+							base64MatchDetails = append(base64MatchDetails,
 								slog.String(fmt.Sprintf("match_%d_decode_skipped", i+1), "Input string too long"))
 							continue
 						}
@@ -540,33 +573,31 @@ func checkFile(cfg *config, filePath string) (int, error) {
 						var decodeValStr string
 						currentMatchIsSignificant := false
 
-						if err != nil {
-							errMsg := "Decode failed"
-							var paddingErr base64.CorruptInputError
-							if errors.As(err, &paddingErr) {
-								errMsg += " (corrupt data/padding)"
-								// Not counted as significant if it's just corrupt data
+						if err == nil {
+							decodeValStr = "\n" + hex.Dump(decodedBytes) // Show hex dump on successful decode
+
+							// New heuristic: check slash count in the original matched string
+							slashCount := strings.Count(match, "/")
+							const maxAllowedSlashesInPotentiallyBenignMatch = 2 // Tunable parameter
+
+							if slashCount > maxAllowedSlashesInPotentiallyBenignMatch {
+								currentMatchIsSignificant = false // Likely a path, not significant even if decodes to non-printable
 							} else {
-								errMsg += " (unexpected error)"
-								currentMatchIsSignificant = true // Unexpected error during decode is significant
+								// Original logic: significant if NOT mostly printable ASCII
+								currentMatchIsSignificant = !isMostlyPrintableASCII(decodedBytes)
 							}
-							decodeValStr = errMsg
 						} else {
-							hexDump := hex.Dump(decodedBytes)
-							const maxDumpLen = 256 // Limit hex dump length in log
-							if len(hexDump) > maxDumpLen {
-								hexDump = hexDump[:maxDumpLen] + "\n... (truncated)"
-							}
-							decodeValStr = "\n" + hexDump // Add newline for readability
-							currentMatchIsSignificant = true // Successful decode is significant
+							decodeValStr = err.Error()
+							// Significant if the error is NOT a common/expected one
+							currentMatchIsSignificant = !isCommonBase64Error(err)
 						}
-						allDecodeAttemptsLogAttrs = append(allDecodeAttemptsLogAttrs,
+						base64MatchDetails = append(base64MatchDetails,
 							slog.Group(fmt.Sprintf("match_%d", i+1),
 								slog.String("snippet", truncateString(match, 60)),
 								slog.String("decode_status", decodeValStr),
 								slog.Bool("is_significant", currentMatchIsSignificant)))
 						if currentMatchIsSignificant {
-							lineHasSignificantBase64 = true
+							lineHadSignificantBase64 = true // Mark that this line has at least one significant Base64 issue
 						}
 					} else {
 						// If not decoding, the first match makes the line significant (already filtered by regex length)
@@ -575,17 +606,22 @@ func checkFile(cfg *config, filePath string) (int, error) {
 					}
 				}
 
-				if lineHasSignificantBase64 {
-					issueCount++ // Count once per line if a significant Base64 string is found
-					lineLevelBase64Key := fmt.Sprintf("line_%s", CheckBase64)
-					base64DetailsGroupArgs := []any{
+				if lineHadSignificantBase64 { // If any Base64 match on the line was significant
+					// Convert []slog.Attr to []any for slog.Group variadic arguments
+					decodeAttemptArgs := make([]any, len(base64MatchDetails))
+					for i, attr := range base64MatchDetails {
+						decodeAttemptArgs[i] = attr
+					}
+
+					base64LogGroup := slog.Group(fmt.Sprintf("line_%s", CheckBase64),
 						slog.Int("match_count_on_line", len(matches)),
-						slog.String("first_match_snippet", truncateString(matches[0], 60)),
-					}
-					if cfg.decodeBase64 && len(allDecodeAttemptsLogAttrs) > 0 {
-						base64DetailsGroupArgs = append(base64DetailsGroupArgs, slog.Group("decode_attempts", allDecodeAttemptsLogAttrs...))
-					}
-					lineAlertAttrs = append(lineAlertAttrs, slog.Group(lineLevelBase64Key, base64DetailsGroupArgs...))
+						slog.String("first_match_snippet", truncateString(matches[0], 30)),
+						// Use the converted slice here for the inner group's attributes
+						slog.Group("decode_attempts", decodeAttemptArgs...),
+					)
+					lineAlertAttrs = append(lineAlertAttrs, base64LogGroup)
+					// Only increment issueCount if there was a *significant* Base64 decode attempt on the line
+					issueCount++ 
 				}
 			}
 		}

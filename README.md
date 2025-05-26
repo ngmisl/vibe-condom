@@ -17,7 +17,7 @@ Vibecondom scans text files for hidden characters, manipulative patterns, and po
   - Zero-width characters
   - Bidirectional text control characters
   - Unicode tag characters (U+E0000 to U+E007F)
-  - Potential Base64 encoded content
+  - Potential Base64 encoded content (with heuristics to reduce false positives from path-like strings and by checking decoded content printability)
   - Mixed script detection (identifies text using multiple writing systems)
 
 - **Flexible Usage**:
@@ -59,7 +59,8 @@ Basic usage:
 # Scan a remote Git repository
 ./vibecondom -mode remote -target https://github.com/username/repo.git
 
-# Decode potential Base64 and hidden Unicode tag characters
+# Decode potential Base64 and hidden Unicode tag characters. 
+# Base64 detection uses heuristics to reduce false positives, such as checking if the decoded content is mostly printable ASCII and if the original string contains many path separators.
 ./vibecondom -mode local -target /path/to/directory -decode-base64
 
 # Specify file extensions to scan (default: .txt,.md,.mdc,.windsurfrules)
@@ -75,7 +76,7 @@ Basic usage:
 | `-exts` | Comma-separated file extensions to check | `.txt,.md,.mdc,.windsurfrules,AGENT.md,AGENTS.md` |
 | `-max-filesize` | Max file size in MB to scan | `50` |
 | `-skip-check` | Comma-separated checks to disable | None |
-| `-decode-base64` | Attempt to decode Base64 strings and hidden Unicode | `false` |
+| `-decode-base64` | Attempt to decode Base64 strings. Uses heuristics (ASCII printability of decoded data, path separator count in source) to reduce false positives. Also decodes hidden Unicode tag characters. | `false` |
 | `-temp-base` | Base directory for temp clones (remote mode) | System temp dir |
 | `-log-level` | Log level: debug, info, warn, error | `info` |
 
