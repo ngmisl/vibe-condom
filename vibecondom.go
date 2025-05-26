@@ -658,21 +658,24 @@ func checkFile(cfg *config, filePath string) (int, error) {
 						if err == nil {
 							decodeValStr = "\n" + hex.Dump(decodedBytes) // Show hex dump on successful decode
 
-							// New heuristic: check slash count in the original matched string
+							// Determine significance based on slash count and printability
 							slashCount := strings.Count(match, "/")
-							const maxAllowedSlashesInPotentiallyBenignMatch = 2 // Tunable parameter
+							printable := isMostlyPrintableASCII(decodedBytes)
 
-							if slashCount > maxAllowedSlashesInPotentiallyBenignMatch {
-								currentMatchIsSignificant = false // Likely a path, not significant even if decodes to non-printable
-								summaryDetail = fmt.Sprintf("Decoded (%d bytes, %d slashes - likely path). First 16 bytes hex: %s", len(decodedBytes), slashCount, truncateString(hex.EncodeToString(decodedBytes), 32))
+							currentMatchIsSignificant = (slashCount == 0 && !printable)
+
+							if currentMatchIsSignificant {
+								summaryDetail = fmt.Sprintf("Decoded to NON-PRINTABLE data (%d bytes, 0 slashes - SIGNIFICANT). First 16 bytes hex: %s", len(decodedBytes), truncateString(hex.EncodeToString(decodedBytes), 32))
 							} else {
-								// Original logic: significant if NOT mostly printable ASCII
-								printable := isMostlyPrintableASCII(decodedBytes)
-								currentMatchIsSignificant = !printable
-								if printable {
-									summaryDetail = fmt.Sprintf("Decoded to printable ASCII (%d bytes).", len(decodedBytes))
-								} else {
-									summaryDetail = fmt.Sprintf("Decoded to NON-PRINTABLE data (%d bytes). First 16 bytes hex: %s", len(decodedBytes), truncateString(hex.EncodeToString(decodedBytes), 32))
+								// Not significant, provide reason
+								if slashCount > 0 { // 1+ slashes implies path-like, not significant
+									if !printable {
+										summaryDetail = fmt.Sprintf("Decoded to NON-PRINTABLE data (%d bytes, %d slashes - considered path-like). First 16 bytes hex: %s", len(decodedBytes), slashCount, truncateString(hex.EncodeToString(decodedBytes), 32))
+									} else {
+										summaryDetail = fmt.Sprintf("Decoded to printable ASCII (%d bytes, %d slashes - considered path-like).", len(decodedBytes), slashCount)
+									}
+								} else { // 0 slashes, but printable (hence not significant)
+									summaryDetail = fmt.Sprintf("Decoded to printable ASCII (%d bytes, 0 slashes).", len(decodedBytes))
 								}
 							}
 						} else {
