@@ -92,6 +92,15 @@ var wordRegex = regexp.MustCompile(`[\pL\pN]+`)
 // Increased minimum length from 20 (5*4) to 28 (7*4) characters to reduce noise.
 var potentialBase64Regex = regexp.MustCompile(`(?:[A-Za-z0-9+/]{4}){7,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?`)
 
+// FindingDetail stores information about a single detected issue for summary reporting.
+type FindingDetail struct {
+	FilePath    string
+	LineNumber  int
+	CheckType   CheckType
+	MatchedText string // The actual text/character that triggered the check
+	Details     string // E.g., decoded content, character code, script names
+}
+
 type config struct {
 	mode                string
 	target              string
@@ -105,6 +114,7 @@ type config struct {
 	issuesFound         int    // Counter for total issues
 	filesChecked        int    // Counter for files checked
 	excludeFilePatterns []string // Patterns for files to exclude
+	CollectedFindings   []FindingDetail // Slice to store all findings for summary
 }
 
 func main() {
@@ -268,6 +278,30 @@ func main() {
 	cfg.logger.Info("Scan summary", "files_checked", cfg.filesChecked, "potential_issues_found", cfg.issuesFound)
 	if cfg.issuesFound > 0 {
 		cfg.logger.Warn("Potential issues were found. Please review the alerts above carefully.")
+
+		// Print summary table if there are collected findings
+		if len(cfg.CollectedFindings) > 0 {
+			fmt.Fprintf(os.Stderr, "\n--- Summary of Findings ---\n")
+			// Determine column widths - can be dynamic or fixed
+			// For now, using fixed widths with truncation for simplicity
+			fmt.Fprintf(os.Stderr, "%-60s | %-5s | %-18s | %-40s | %s\n", "File", "Line", "Check Type", "Matched Text", "Details")
+			fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 150)) // Separator line
+
+			for _, finding := range cfg.CollectedFindings {
+				truncatedFile := truncateString(finding.FilePath, 58)
+				truncatedMatched := truncateString(finding.MatchedText, 38)
+				truncatedDetails := truncateString(finding.Details, 70) // Adjust max length as needed
+
+				fmt.Fprintf(os.Stderr, "%-60s | %-5d | %-18s | %-40s | %s\n",
+					truncatedFile,
+					finding.LineNumber,
+					string(finding.CheckType),
+					truncatedMatched,
+					truncatedDetails)
+			}
+			fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 150))
+		}
+
 		os.Exit(2) // Exit with 2 if issues are found
 	}
 }
@@ -494,29 +528,47 @@ func checkFile(cfg *config, filePath string) (int, error) {
 				details := slog.Group("details", slog.Int("code", int(r)), slog.String("char_hex", fmt.Sprintf("0x%X", r)))
 				lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckASCIIControl), details))
 				issueCount++
+				cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+					FilePath:    filePath,
+					LineNumber:  lineNumber,
+					CheckType:   CheckASCIIControl,
+					MatchedText: string(r),
+					Details:     fmt.Sprintf("ASCII Control Char: 0x%X (Col %d)", r, columnNumber),
+				})
 			}
 
 			// 2. Zero-Width Characters
 			if !shouldSkipCheck(cfg, CheckZeroWidth) {
-				var zwDetail, zwCode string
+				var zwDetail, zwCode, zwMatchedText string
 				switch r {
 				case '\u200B':
 					zwDetail = "Zero Width Space"
 					zwCode = "U+200B"
+					zwMatchedText = "\u200B"
 				case '\u200C':
 					zwDetail = "Zero Width Non-Joiner"
 					zwCode = "U+200C"
+					zwMatchedText = "\u200C"
 				case '\u200D':
 					zwDetail = "Zero Width Joiner"
 					zwCode = "U+200D"
+					zwMatchedText = "\u200D"
 				case '\uFEFF':
 					zwDetail = "Zero Width No-Break Space / BOM"
 					zwCode = "U+FEFF"
+					zwMatchedText = "\uFEFF"
 				}
 				if zwDetail != "" {
 					details := slog.Group("details", slog.String("description", zwDetail), slog.String("code", zwCode))
 					lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckZeroWidth), details))
 					issueCount++
+					cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+						FilePath:    filePath,
+						LineNumber:  lineNumber,
+						CheckType:   CheckZeroWidth,
+						MatchedText: zwMatchedText,
+						Details:     fmt.Sprintf("%s (%s) (Col %d)", zwDetail, zwCode, columnNumber),
+					})
 				}
 			}
 
@@ -528,6 +580,13 @@ func checkFile(cfg *config, filePath string) (int, error) {
 					details := slog.Group("details", slog.String("code", bidiCode), slog.Bool("is_rlo", isRLO))
 					lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckBiDi), details))
 					issueCount++
+					cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+						FilePath:    filePath,
+						LineNumber:  lineNumber,
+						CheckType:   CheckBiDi,
+						MatchedText: string(r),
+						Details:     fmt.Sprintf("BiDi Control Char: %s (RLO: %t) (Col %d)", bidiCode, isRLO, columnNumber),
+					})
 				}
 			}
 
@@ -542,6 +601,20 @@ func checkFile(cfg *config, filePath string) (int, error) {
 						slog.Int("decimal_value", int(r)))
 					lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckTagChars), details))
 					issueCount++
+					decodedTagDetail := ""
+					if cfg.decodeBase64 { // Assuming decodeBase64 flag also implies decoding tags for summary
+						decodedVal := decodeTagChars(string(r))
+						if decodedVal != "" {
+							decodedTagDetail = fmt.Sprintf(" Decodes to: '%s'", decodedVal)
+						}
+					}
+					cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+						FilePath:    filePath,
+						LineNumber:  lineNumber,
+						CheckType:   CheckTagChars,
+						MatchedText: string(r),
+						Details:     fmt.Sprintf("Tag Character: %s (Col %d)%s", tagCode, columnNumber, decodedTagDetail),
+					})
 				}
 			}
 		} // End char checks
@@ -558,6 +631,14 @@ func checkFile(cfg *config, filePath string) (int, error) {
 				// If not decoding, and we have matches, assume it's significant for now (due to longer regex)
 				if !cfg.decodeBase64 {
 					lineHadSignificantBase64 = true
+					// For summary when not decoding, just list the first match as an example
+					cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+						FilePath:    filePath,
+						LineNumber:  lineNumber,
+						CheckType:   CheckBase64,
+						MatchedText: truncateString(matches[0], 50),
+						Details:     fmt.Sprintf("Potential Base64 string (decode not enabled, %d matches on line)", len(matches)),
+					})
 				}
 
 				for i, match := range matches {
@@ -571,6 +652,7 @@ func checkFile(cfg *config, filePath string) (int, error) {
 
 						decodedBytes, err := base64.StdEncoding.DecodeString(match)
 						var decodeValStr string
+						var summaryDetail string
 						currentMatchIsSignificant := false
 
 						if err == nil {
@@ -582,14 +664,27 @@ func checkFile(cfg *config, filePath string) (int, error) {
 
 							if slashCount > maxAllowedSlashesInPotentiallyBenignMatch {
 								currentMatchIsSignificant = false // Likely a path, not significant even if decodes to non-printable
+								summaryDetail = fmt.Sprintf("Decoded (%d bytes, %d slashes - likely path). First 16 bytes hex: %s", len(decodedBytes), slashCount, truncateString(hex.EncodeToString(decodedBytes), 32))
 							} else {
 								// Original logic: significant if NOT mostly printable ASCII
-								currentMatchIsSignificant = !isMostlyPrintableASCII(decodedBytes)
+								printable := isMostlyPrintableASCII(decodedBytes)
+								currentMatchIsSignificant = !printable
+								if printable {
+									summaryDetail = fmt.Sprintf("Decoded to printable ASCII (%d bytes).", len(decodedBytes))
+								} else {
+									summaryDetail = fmt.Sprintf("Decoded to NON-PRINTABLE data (%d bytes). First 16 bytes hex: %s", len(decodedBytes), truncateString(hex.EncodeToString(decodedBytes), 32))
+								}
 							}
 						} else {
 							decodeValStr = err.Error()
 							// Significant if the error is NOT a common/expected one
-							currentMatchIsSignificant = !isCommonBase64Error(err)
+							commonError := isCommonBase64Error(err)
+							currentMatchIsSignificant = !commonError
+							if commonError {
+								summaryDetail = fmt.Sprintf("Decode error (common): %s", err.Error())
+							} else {
+								summaryDetail = fmt.Sprintf("Decode error (UNCOMMON/SIGNIFICANT): %s", err.Error())
+							}
 						}
 						base64MatchDetails = append(base64MatchDetails,
 							slog.Group(fmt.Sprintf("match_%d", i+1),
@@ -598,11 +693,19 @@ func checkFile(cfg *config, filePath string) (int, error) {
 								slog.Bool("is_significant", currentMatchIsSignificant)))
 						if currentMatchIsSignificant {
 							lineHadSignificantBase64 = true // Mark that this line has at least one significant Base64 issue
+							cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+								FilePath:    filePath,
+								LineNumber:  lineNumber,
+								CheckType:   CheckBase64,
+								MatchedText: truncateString(match, 50),
+								Details:     summaryDetail,
+							})
 						}
 					} else {
 						// If not decoding, the first match makes the line significant (already filtered by regex length)
 						// No per-match attributes needed here beyond the main line alert.
-						break // Only need to know there's at least one match.
+						// This case is handled before the loop if !cfg.decodeBase64
+						break 
 					}
 				}
 
@@ -630,14 +733,23 @@ func checkFile(cfg *config, filePath string) (int, error) {
 		if !shouldSkipCheck(cfg, CheckMixedScript) {
 			words := wordRegex.FindAllString(line, -1)
 			var mixedScriptWords []any // Using []any for slog group args
+			var lineHadMixedScript bool
 			for _, word := range words {
 				scripts := identifyScripts(word)
 				if len(scripts) > 1 { // Found > 1 script in the same word
 					mixedScriptWords = append(mixedScriptWords, slog.Group(truncateString(word, 50), slog.Any("scripts", scripts)))
-					// Don't break, collect all mixed words on the line
+					lineHadMixedScript = true
+					cfg.CollectedFindings = append(cfg.CollectedFindings, FindingDetail{
+						FilePath:    filePath,
+						LineNumber:  lineNumber,
+						CheckType:   CheckMixedScript,
+						MatchedText: truncateString(word, 50),
+						Details:     fmt.Sprintf("Mixed scripts: %v", scripts),
+					})
+					// Don't break, collect all mixed words on the line for logging, but only one finding per type for summary
 				}
 			}
-			if len(mixedScriptWords) > 0 {
+			if lineHadMixedScript {
 				issueCount++ // Count once per line with any mixed script words
 				lineAlertAttrs = append(lineAlertAttrs, slog.Group(fmt.Sprintf("line_%s", CheckMixedScript), mixedScriptWords...))
 			}
