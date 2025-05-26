@@ -56,7 +56,8 @@ var wordRegex = regexp.MustCompile(`[\pL\pN]+`)
 
 // --- Regex for Base64 Heuristic ---
 // Looks for potential Base64 strings (alphanumeric + / +, padding) - heuristic!
-var potentialBase64Regex = regexp.MustCompile(`(?:[A-Za-z0-9+/]{4}){5,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?`)
+// Increased minimum length from 20 (5*4) to 28 (7*4) characters to reduce noise.
+var potentialBase64Regex = regexp.MustCompile(`(?:[A-Za-z0-9+/]{4}){7,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?`)
 
 type config struct {
 	mode                string
@@ -319,14 +320,14 @@ func validateGitURL(url string) error {
 	// Basic check for common Git URL patterns
 	// This is a basic validation - you might want to adjust based on your needs
 	validPrefixes := []string{"https://", "http://", "git@", "git://", "ssh://"}
-	
+
 	// Check if URL starts with any valid prefix
 	for _, prefix := range validPrefixes {
 		if strings.HasPrefix(url, prefix) {
 			return nil
 		}
 	}
-	
+
 	return fmt.Errorf("invalid Git URL format. Must start with one of: %v", validPrefixes)
 }
 
@@ -361,13 +362,13 @@ func checkRemoteRepo(cfg *config) error {
 
 	// Execute git clone command safely with context
 	cmd := exec.CommandContext(ctx, cfg.gitPath, "clone", "--depth", "1", "--quiet", cfg.target, tempDir)
-	
+
 	// Set a clean environment
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")} // Only keep PATH for security
-	
+
 	// Set working directory to a safe location
 	cmd.Dir = cfg.tempDirBase
-	
+
 	// Capture stderr for better error messages
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -378,16 +379,16 @@ func checkRemoteRepo(cfg *config) error {
 		if ctx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("git clone timed out after 5 minutes")
 		}
-		
+
 		// Attempt to remove partially cloned directory on failure
 		_ = os.RemoveAll(tempDir) // Ignore error during cleanup on failure path
-		
+
 		// Sanitize the error message to prevent command injection in logs
 		safeURL := cfg.target
 		if len(safeURL) > 100 { // Truncate long URLs in error messages
 			safeURL = safeURL[:100] + "..."
 		}
-		
+
 		// Provide sanitized context in the error message
 		return fmt.Errorf("git clone failed: %w. Git stderr: %s", err, strings.TrimSpace(stderr.String()))
 	}
@@ -457,7 +458,6 @@ func checkFile(cfg *config, filePath string) (int, error) {
 
 			// 1. ASCII Control Characters (excluding tab, CR, LF)
 			if !shouldSkipCheck(cfg, CheckASCIIControl) && r < 32 && r != '\t' && r != '\n' && r != '\r' {
-				// msg := fmt.Sprintf("Invisible ASCII control character (Code: %d)", r)
 				details := slog.Group("details", slog.Int("code", int(r)), slog.String("char_hex", fmt.Sprintf("0x%X", r)))
 				lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckASCIIControl), details))
 				issueCount++
@@ -481,7 +481,6 @@ func checkFile(cfg *config, filePath string) (int, error) {
 					zwCode = "U+FEFF"
 				}
 				if zwDetail != "" {
-					// msg := fmt.Sprintf("%s (%s) detected", zwDetail, zwCode)
 					details := slog.Group("details", slog.String("description", zwDetail), slog.String("code", zwCode))
 					lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckZeroWidth), details))
 					issueCount++
@@ -493,7 +492,6 @@ func checkFile(cfg *config, filePath string) (int, error) {
 				if (r >= '\u202A' && r <= '\u202E') || (r >= '\u2066' && r <= '\u2069') {
 					bidiCode := fmt.Sprintf("U+%04X", r)
 					isRLO := r == '\u202E'
-					// msg := fmt.Sprintf("Bidi Control Character (%s)%s", bidiCode, map[bool]string{true:" - RLO!", false:""}[isRLO])
 					details := slog.Group("details", slog.String("code", bidiCode), slog.Bool("is_rlo", isRLO))
 					lineAlertAttrs = append(lineAlertAttrs, slog.Any(fmt.Sprintf("col_%d_%s", columnNumber, CheckBiDi), details))
 					issueCount++
@@ -521,58 +519,73 @@ func checkFile(cfg *config, filePath string) (int, error) {
 		if !shouldSkipCheck(cfg, CheckBase64) {
 			matches := potentialBase64Regex.FindAllString(line, -1) // Find all non-overlapping matches
 			if len(matches) > 0 {
-				issueCount++ // Count once per line with any base64 match for summary
-				// Use a distinct key for the line-level finding
-				lineLevelBase64Key := fmt.Sprintf("line_%s", CheckBase64)
-				base64Details := slog.Group("details",
-					slog.Int("match_count", len(matches)),
-					slog.String("first_match_snippet", truncateString(matches[0], 50)),
-				)
-				lineAlertAttrs = append(lineAlertAttrs, slog.Any(lineLevelBase64Key, base64Details))
+				var lineHasSignificantBase64 bool
+				var allDecodeAttemptsLogAttrs []any // For logging all attempts if decodeBase64 is on
 
-				// Attempt decode if flag is set
-				if cfg.decodeBase64 {
-					// Add decoded results under the main finding
-					var decodeAttrs []slog.Attr
-					for i, match := range matches {
-						// Enforce a maximum length on string to decode to prevent DoS on regex false positives
+				// If not decoding, and we have matches, assume it's significant for now (due to longer regex)
+				if !cfg.decodeBase64 {
+					lineHasSignificantBase64 = true
+				}
+
+				for i, match := range matches {
+					if cfg.decodeBase64 {
 						const maxBase64Len = 10 * 1024 // Limit potential base64 strings to decode to 10KB
 						if len(match) > maxBase64Len {
-							decodeAttrs = append(decodeAttrs, slog.String(fmt.Sprintf("decode_attempt_%d", i+1), "Skipped decode: Input string too long"))
+							allDecodeAttemptsLogAttrs = append(allDecodeAttemptsLogAttrs,
+								slog.String(fmt.Sprintf("match_%d_decode_skipped", i+1), "Input string too long"))
 							continue
 						}
 
 						decodedBytes, err := base64.StdEncoding.DecodeString(match)
-						var decodeVal any
+						var decodeValStr string
+						currentMatchIsSignificant := false
+
 						if err != nil {
-							// Only log simple error message for common decode failures
 							errMsg := "Decode failed"
-							// Check for common padding error specifically
 							var paddingErr base64.CorruptInputError
 							if errors.As(err, &paddingErr) {
-								errMsg += " (invalid padding/chars)"
+								errMsg += " (corrupt data/padding)"
+								// Not counted as significant if it's just corrupt data
+							} else {
+								errMsg += " (unexpected error)"
+								currentMatchIsSignificant = true // Unexpected error during decode is significant
 							}
-							// Don't log the full complex error object by default
-							decodeVal = slog.StringValue(errMsg)
+							decodeValStr = errMsg
 						} else {
-							// Show as hex dump for safety
 							hexDump := hex.Dump(decodedBytes)
 							const maxDumpLen = 256 // Limit hex dump length in log
 							if len(hexDump) > maxDumpLen {
 								hexDump = hexDump[:maxDumpLen] + "\n... (truncated)"
 							}
-							// Use StringValue to embed the potentially multi-line dump correctly
-							decodeVal = slog.StringValue("\n" + hexDump) // Add newline for readability
+							decodeValStr = "\n" + hexDump // Add newline for readability
+							currentMatchIsSignificant = true // Successful decode is significant
 						}
-						decodeAttrs = append(decodeAttrs, slog.Any(fmt.Sprintf("decode_attempt_%d", i+1), decodeVal))
+						allDecodeAttemptsLogAttrs = append(allDecodeAttemptsLogAttrs,
+							slog.Group(fmt.Sprintf("match_%d", i+1),
+								slog.String("snippet", truncateString(match, 60)),
+								slog.String("decode_status", decodeValStr),
+								slog.Bool("is_significant", currentMatchIsSignificant)))
+						if currentMatchIsSignificant {
+							lineHasSignificantBase64 = true
+						}
+					} else {
+						// If not decoding, the first match makes the line significant (already filtered by regex length)
+						// No per-match attributes needed here beyond the main line alert.
+						break // Only need to know there's at least one match.
 					}
-					// Convert []slog.Attr to []any for slog.Group
-					decodeAttrsAny := make([]any, len(decodeAttrs))
-					for i, attr := range decodeAttrs {
-						decodeAttrsAny[i] = attr
+				}
+
+				if lineHasSignificantBase64 {
+					issueCount++ // Count once per line if a significant Base64 string is found
+					lineLevelBase64Key := fmt.Sprintf("line_%s", CheckBase64)
+					base64DetailsGroupArgs := []any{
+						slog.Int("match_count_on_line", len(matches)),
+						slog.String("first_match_snippet", truncateString(matches[0], 60)),
 					}
-					// Add all decode attempts as a group under the main base64 finding
-					lineAlertAttrs = append(lineAlertAttrs, slog.Group("decode_results", decodeAttrsAny...))
+					if cfg.decodeBase64 && len(allDecodeAttemptsLogAttrs) > 0 {
+						base64DetailsGroupArgs = append(base64DetailsGroupArgs, slog.Group("decode_attempts", allDecodeAttemptsLogAttrs...))
+					}
+					lineAlertAttrs = append(lineAlertAttrs, slog.Group(lineLevelBase64Key, base64DetailsGroupArgs...))
 				}
 			}
 		}
@@ -608,11 +621,13 @@ func checkFile(cfg *config, filePath string) (int, error) {
 			}
 
 			// Check if this line has tag characters and decode them if requested
-			if cfg.decodeBase64 {
-				// Attempt to decode the entire line's tag characters
-				decoded := decodeTagChars(line)
-				if decoded != "" {
-					logArgs = append(logArgs, slog.String("decoded_tag_chars", decoded))
+			// Note: The original code had this decodeTagChars call within the `if cfg.decodeBase64` block.
+			// This seems like it should be independent of base64 decoding, perhaps tied to CheckTagChars.
+			// For now, keeping original behavior, but this could be a point of refinement.
+			if cfg.decodeBase64 { // Or perhaps `!shouldSkipCheck(cfg, CheckTagChars) && cfg.someDecodeTagCharFlag`
+				decodedTags := decodeTagChars(line)
+				if decodedTags != "" {
+					logArgs = append(logArgs, slog.String("decoded_tag_chars", decodedTags))
 				}
 			}
 
@@ -685,7 +700,7 @@ func truncateString(s string, maxLen int) string {
 func decodeTagChars(input string) string {
 	var buf strings.Builder
 	foundTags := false
-	
+
 	for _, r := range input {
 		// Check if it's a tag character (U+E0000 to U+E007F)
 		if r >= 0xE0000 && r <= 0xE007F {
@@ -709,10 +724,10 @@ func decodeTagChars(input string) string {
 			}
 		}
 	}
-	
+
 	if !foundTags {
 		return ""
 	}
-	
+
 	return buf.String()
 }
